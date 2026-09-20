@@ -265,19 +265,3 @@ final_project/
 └── CLAUDE.md                  # panduan arsitektur & gaya kode project
 ```
 
-## 14. Limitations & Design Decisions
-
-- **Source API bukan push-based realtime** — PetaBencana hanya menyediakan endpoint arsip berbasis rentang waktu, tidak ada webhook/streaming API resmi.
-- **Streaming menggunakan scheduled polling**, bukan continuous streaming — konsekuensi langsung dari keterbatasan di atas.
-- **DQ bukan hard gate** — seluruh data staging tetap diteruskan ke curated apa adanya; DQ murni tabel audit terpisah (lihat bagian 8).
-- **Dimension pipeline belum diorkestrasi Airflow** — `dimension/extract_dimension_to_postgres.py` dan `dimension/load_dimension_to_bigquery.py` saat ini hanya dijalankan manual/lewat `auto_command.sh dimension`, tidak ada task Airflow yang menjalankannya secara terjadwal.
-- **`dbt/seeds/dim_region.csv` masih ada namun sudah tidak menjadi sumber data aktif** — tabel `dim_region` di BigQuery sekarang dimuat oleh pipeline PostgreSQL, bukan `dbt seed`. Seed file dipertahankan karena `disaster_batch_staging_dq.sql`/`disaster_stream_staging_dq.sql` masih memanggilnya lewat `ref('dim_region')` (belum dimigrasi ke `source()` seperti `disaster_curated.sql`).
-- **`disaster_curated` bermaterialisasi sebagai VIEW**, bukan table/incremental — keputusan sadar berdasarkan volume data yang masih kecil dan kebutuhan freshness dari sisi streaming; dapat ditinjau ulang jika volume data bertambah signifikan.
-- **GCS bucket versioning berstatus "Suspended"** — state cursor batch (`_state/last_completed_date.txt`) tidak memiliki riwayat versi; audit atas insiden cursor mengandalkan log task Airflow dan data BigQuery, bukan riwayat objek GCS.
-
-## 15. Future Improvements
-
-- **Automated tests** — saat ini validasi dilakukan manual/lewat audit ad-hoc (mock testing untuk fungsi retry & next_date sempat dilakukan selama pengembangan, tapi belum ada test suite otomatis yang terintegrasi ke CI).
-- **Explicit dependency management** — beberapa dependency (`google-cloud-storage` di root vs `airflow/requirements-airflow.txt`) memakai versi berbeda karena constraint dari `dbt-bigquery`; dapat dirapikan lebih lanjut dengan dependency pinning yang lebih eksplisit lintas environment.
-- **BigQuery partitioning/clustering (opsional)** — belum diperlukan pada volume data saat ini, tapi relevan jika data historis dan streaming terus bertambah signifikan.
-- **Dimension pipeline orchestration** — menambahkan task Airflow terjadwal untuk `dimension/` alih-alih hanya manual, agar `dim_region`/`dim_province` ikut ter-refresh otomatis.
