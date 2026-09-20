@@ -1,0 +1,22 @@
+# Dependency untuk task ingestion (fetch_to_gcs.py)
+requests==2.34.2
+# dbt-bigquery constrains google-cloud-storage to <3.2 (root requirements.txt
+# uses 3.14.1, which only works on the host/batch venv, not here alongside
+# dbt). 2.19.0 is the version pip actually resolved for this image and is
+# pinned for reproducibility; fetch_to_gcs.py only uses basic, stable
+# storage.Client/bucket/blob APIs that are unaffected by this older version.
+google-cloud-storage==2.19.0
+
+# Dependency untuk task raw load (batch/load_raw_to_bigquery.py)
+# Versi sama dengan yang sudah dipakai/dites di requirements.txt root.
+google-cloud-bigquery==3.45.0
+
+# Dependency untuk task dbt (staging & DQ)
+# Versi sama dengan yang sudah dites berhasil di dbt/requirements.txt (host venv).
+dbt-core==1.12.5
+dbt-bigquery==1.12.1
+
+# Dependency untuk validasi JSON Schema di stream/load_stream_to_bigquery.py.
+# Sebelumnya hanya tersedia transitif lewat dbt-core/dbt-common; dipin eksplisit
+# di versi yang sudah terbukti jalan di image ini (4.23.0).
+jsonschema==4.23.0

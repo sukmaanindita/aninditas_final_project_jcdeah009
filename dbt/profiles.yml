@@ -1,0 +1,11 @@
+
+final_project:
+  target: dev
+  outputs:
+    dev:
+      type: bigquery
+      method: oauth
+      project: "{{ env_var('GCP_PROJECT_ID') }}"
+      dataset: "{{ env_var('BQ_DATASET_STAGING') }}"
+      location: "{{ env_var('GCP_LOCATION') }}"
+      threads: 4

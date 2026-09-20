@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PetaBencana Fire Stream Event",
+  "description": "Envelope published by ingestion/publish_stream_to_pubsub.py and consumed by stream/load_stream_to_bigquery.py.",
+  "type": "object",
+  "required": ["polled_at", "window_start", "window_end", "fire_reports"],
+  "properties": {
+    "polled_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC timestamp when this poll ran, e.g. 2026-09-19T10:00:00Z"
+    },
+    "window_start": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "window_end": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "fire_reports": {
+      "type": "array",
+      "description": "Raw PetaBencana geometry objects already filtered to disaster_type == fire. Contents beyond object shape are intentionally unconstrained - the full geometry/properties are passed through as-is.",
+      "items": {
+        "type": "object"
+      }
+    }
+  }
+}

@@ -1,0 +1,40 @@
+# Declares the existing BigQuery RAW table as a dbt source.
+# This is metadata only - no models are created here yet.
+# Future STAGING models will read from source('raw', 'disaster_batch_raw').
+
+version: 2
+
+sources:
+  - name: raw
+    database: "{{ env_var('GCP_PROJECT_ID') }}"
+    schema: "{{ env_var('BQ_DATASET_RAW') }}"
+    tables:
+      - name: disaster_batch_raw
+        description: >
+          Raw disaster reports loaded from GCS
+          (raw/petabencana/fire/year=YYYY/month=MM/YYYY-MM-DD.json) by
+          batch/load_raw_to_bigquery.py. All disaster_type values are
+          included; no business transformation applied.
+      - name: disaster_stream_raw
+        description: >
+          Fire reports published to Pub/Sub (see
+          ingestion/publish_stream_to_pubsub.py) and loaded by
+          stream/load_stream_to_bigquery.py, which pulls messages from
+          PUBSUB_SUBSCRIPTION_RAW. Already pre-filtered to disaster_type =
+          fire at publish time; same schema as disaster_batch_raw.
+
+  - name: dimension
+    database: "{{ env_var('GCP_PROJECT_ID') }}"
+    schema: "{{ env_var('BQ_DATASET_DIMENSION') }}"
+    tables:
+      - name: dim_region
+        description: >
+          Indonesian regency/city reference data. Loaded by
+          dimension/load_dimension_to_bigquery.py from PostgreSQL (which is
+          itself populated by dimension/extract_dimension_to_postgres.py
+          from DIM_REGION_API_URL) - not by dbt seed anymore. province_id
+          relates to dim_province.id.
+      - name: dim_province
+        description: >
+          Indonesian province reference data. Loaded the same way as
+          dim_region, from DIM_PROVINCE_API_URL.

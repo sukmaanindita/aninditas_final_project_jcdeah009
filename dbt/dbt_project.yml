@@ -1,0 +1,23 @@
+# dbt project for the fire disaster reports pipeline (RAW -> STAGING -> DQ -> CURATED).
+
+name: "final_project"
+version: "1.0.0"
+config-version: 2
+
+# Matches the profile name in profiles.yml
+profile: "final_project"
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  final_project:
+    curated:
+      # Own dataset, separate from staging/DQ (which stay in the default schema).
+      +schema: "{{ env_var('BQ_DATASET_CURATED') }}"
+

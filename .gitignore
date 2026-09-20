@@ -1,0 +1,18 @@
+# Environment variables (contains local config; never commit)
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Airflow local runtime files
+airflow/logs/
+
+# dbt local runtime files
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+dbt/seeds/
+
+CLAUDE.md

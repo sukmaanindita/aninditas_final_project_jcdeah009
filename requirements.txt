@@ -1,0 +1,13 @@
+requests==2.34.2
+google-cloud-storage==3.14.1
+python-dotenv==1.2.3
+
+# Batch pipeline (GCS raw -> BigQuery RAW)
+apache-beam[gcp]==2.76.0
+google-cloud-bigquery==3.45.0
+
+# Streaming publisher (PetaBencana poll -> Pub/Sub)
+google-cloud-pubsub==2.40.0
+
+# Dimension pipeline (GitHub JSON -> PostgreSQL -> BigQuery)
+psycopg2-binary==2.9.13
