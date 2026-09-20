@@ -23,10 +23,7 @@ deduplicated as (
 
 )
 
--- LEFT JOIN because region_code can be NULL or unmatched - those rows must
--- still show up in curated, just without a region/province name.
--- dim_region/dim_province are sources, not ref() - they're loaded by
--- dimension/load_dimension_to_bigquery.py from PostgreSQL, not dbt seed.
+-- LEFT JOIN because region_code can be NULL or unmatched 
 select
     d.record_key,
     d.created_at,
@@ -49,6 +46,12 @@ left join {{ source('dimension', 'dim_region') }} as dim_region
     on d.region_code = dim_region.id
 left join {{ source('dimension', 'dim_province') }} as dim_province
     on dim_region.province_id = dim_province.id
+left join {{ ref('disaster_batch_staging_dq') }} as batch_dq
+    on d.record_key = batch_dq.record_key
+left join {{ ref('disaster_stream_staging_dq') }} as stream_dq
+    on d.record_key = stream_dq.record_key
 
 -- Exclude simulation/drill reports from the dashboard - raw and staging keep them for audit.
 where lower(coalesce(d.text, '')) not like '%simulasi%'
+  and batch_dq.record_key is null
+  and stream_dq.record_key is null

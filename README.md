@@ -43,13 +43,14 @@ BigQuery RAW (batch/load_raw_to_bigquery.py, MERGE by record_key)
 dbt STAGING (filter disaster_type = 'fire')
       |
       v
-dbt DATA QUALITY (validasi, tidak memblokir)
+dbt DQ CHECK (disaster_batch_staging_dq)
       |
-      v
-dbt CURATED (union + dedup + enrichment dimension)
+      +--> FAIL --> DQ ISSUE TABLE (record tetap ada di STAGING, tidak dipromosikan)
       |
-      v
-Dashboard (Looker Studio)
+      +--> PASS --> dbt CURATED (union + dedup + enrichment dimension)
+                          |
+                          v
+                    Dashboard (Looker Studio)
 ```
 
 **Streaming (near-real-time, scheduled polling)**
@@ -69,10 +70,17 @@ Python consumer (stream/load_stream_to_bigquery.py, bounded pull)
 BigQuery RAW (MERGE by record_key)
       |
       v
-dbt STAGING -> dbt DATA QUALITY -> dbt CURATED (union dengan batch)
+dbt STAGING (disaster_stream_staging)
       |
       v
-Dashboard (Looker Studio)
+dbt DQ CHECK (disaster_stream_staging_dq)
+      |
+      +--> FAIL --> DQ ISSUE TABLE (record tetap ada di STAGING, tidak dipromosikan)
+      |
+      +--> PASS --> dbt CURATED (union dengan batch)
+                          |
+                          v
+                    Dashboard (Looker Studio)
 ```
 
 **Dimension**
@@ -118,8 +126,8 @@ Dipakai oleh CURATED (enrichment) dan DQ (validasi region_code)
 4. **`record_key` deterministik**: `SHA256(pkey|created_at)` jika `pkey` tersedia, atau `SHA256(no_pkey|url|created_at)` sebagai fallback jika `pkey` NULL. Formula ini identik dipakai di RAW batch maupun stream.
 5. **MERGE/idempotency**: proses re-run untuk tanggal yang sama tidak membuat baris duplikat — baris yang sudah ada di-update, bukan di-insert ulang.
 6. **dbt STAGING** (`disaster_batch_staging`): parsing field dari `raw_geometry` (JSON) + filter `disaster_type = 'fire'`.
-7. **dbt DATA QUALITY** (`disaster_batch_staging_dq`).
-8. **dbt CURATED** (`disaster_curated`): union dengan staging stream, dedup, enrichment dimension.
+7. **dbt DATA QUALITY** (`disaster_batch_staging_dq`) — lihat bagian 8.
+8. **dbt CURATED** (`disaster_curated`): union dengan staging stream, dedup, enrichment dimension, **lalu mengecualikan record yang `record_key`-nya tercatat di `disaster_batch_staging_dq` maupun `disaster_stream_staging_dq`** (DQ gate — lihat bagian 8).
 
 **Mekanisme jadwal batch (kondisi aktual saat ini)**: DAG `fire_ingestion_dag` berjalan setiap 15 menit (`schedule="*/15 * * * *"`, `max_active_runs=1`). Setiap run memproses **maksimal 1 tanggal historis**, ditentukan otomatis lewat cursor state (`_state/last_completed_date.txt` di GCS) — bukan lewat input manual tanggal. Kalau satu tanggal gagal diproses, cursor tidak maju, sehingga run berikutnya otomatis mengulang tanggal yang sama (retry, bukan skip). Setelah seluruh rentang Januari–Agustus 2026 selesai, run berikutnya menjadi no-op.
 
@@ -141,10 +149,10 @@ Perlu ditekankan secara jujur: implementasi streaming pada project ini **bukan c
 | **RAW** (`disaster_batch_raw`, `disaster_stream_raw`) | Seluruh laporan bencana apa adanya dari API (semua `disaster_type`), tanpa transformasi bisnis | 1 baris = 1 laporan bencana (`record_key`) |
 | **STAGING** (`disaster_batch_staging`, `disaster_stream_staging`) | Hanya `disaster_type='fire'`, field di-parse dari JSON mentah | 1 baris = 1 laporan kebakaran |
 | **DQ** (`disaster_batch_staging_dq`, `disaster_stream_staging_dq`) | Hasil validasi staging (lihat bagian 8) | 1 baris = 1 pelanggaran rule per record |
-| **CURATED** (`disaster_curated`) | Union batch+stream, dedup by `record_key`, enrichment nama wilayah, exclude record simulasi | 1 baris = 1 laporan kebakaran final untuk dashboard |
+| **CURATED** (`disaster_curated`) | Union batch+stream, dedup by `record_key`, enrichment nama wilayah, exclude record simulasi, **exclude record yang gagal DQ** (lihat bagian 8) | 1 baris = 1 laporan kebakaran yang lolos DQ, siap untuk dashboard |
 | **DIMENSION** (`dim_region`, `dim_province`) | Data referensi wilayah Indonesia (BPS regency/province code) | 1 baris = 1 wilayah |
 
-**`record_key`** adalah identifier utama di seluruh layer (RAW s/d CURATED) — dipakai untuk MERGE (idempotency) dan sebagai dedup key di CURATED.
+**`record_key`** adalah identifier utama di seluruh layer (RAW s/d CURATED) — dipakai untuk MERGE (idempotency), sebagai dedup key di CURATED, dan sebagai kunci **DQ gate**: `disaster_curated.sql` melakukan `LEFT JOIN` ke `disaster_batch_staging_dq` dan `disaster_stream_staging_dq` by `record_key`, lalu `WHERE batch_dq.record_key IS NULL AND stream_dq.record_key IS NULL` — record yang `record_key`-nya tercatat di salah satu DQ table (apa pun rule yang gagal) tidak dipromosikan ke CURATED.
 
 **Enrichment region/province**: CURATED melakukan `LEFT JOIN` `disaster_curated.region_code` ke `dim_region.id`, lalu `dim_region.province_id` ke `dim_province.id`, menghasilkan `region_name` dan `province_name`. Menggunakan `LEFT JOIN` (bukan `INNER JOIN`) karena sebagian `region_code` bernilai NULL atau tidak ditemukan di dimension — baris tetap dipertahankan di CURATED, hanya nama wilayahnya kosong.
 
@@ -158,12 +166,25 @@ DQ dievaluasi lewat 5 rule berikut (di `disaster_batch_staging_dq` dan `disaster
 4. **Source inconsistency check** — nama `city` dari source tidak cocok (setelah normalisasi deterministik: uppercase, hapus prefix "KABUPATEN"/"KOTA", hapus spasi) dengan `dim_region.name` untuk `region_code` yang sama.
 5. **Duplicate check** — `record_key` muncul lebih dari sekali di staging (secara desain seharusnya tidak terjadi karena staging bersifat incremental dengan `unique_key=record_key`; rule ini adalah pengecekan defensif).
 
-**Penting — DQ adalah monitoring/audit layer, BUKAN hard gate**: implementasi aktual **tidak melakukan filtering apa pun** terhadap staging berdasarkan hasil DQ. Konvensi yang dipakai: DQ hanya mencatat baris untuk **check yang GAGAL** (satu baris = satu pelanggaran); tidak ada baris berarti check tersebut lolos untuk record itu. Alasan desain:
+Konvensi tabel DQ: hanya mencatat baris untuk **check yang GAGAL** (satu baris = satu pelanggaran); tidak ada baris berarti check tersebut lolos untuk record itu. DQ mencakup **kedua pipeline** — `disaster_batch_staging_dq` untuk jalur batch, `disaster_stream_staging_dq` untuk jalur stream, dengan 5 rule yang identik.
 
-- Laporan bencana tetap dipertahankan apa adanya — data source tidak pernah dibuang hanya karena tidak lolos satu rule kualitas data.
-- Record bermasalah tetap dapat diidentifikasi secara eksplisit lewat tabel DQ terpisah, tanpa mengubah/menyembunyikan data staging.
-- Hasil DQ disimpan di tabel terpisah (`*_staging_dq`), bukan sebagai kolom tambahan di staging — menjaga staging tetap murni representasi data yang sudah difilter tipe bencananya saja.
-- Pendekatan ini mencegah kehilangan informasi source akibat validasi yang terlalu ketat, mengingat data laporan bencana publik secara alami memiliki inkonsistensi (lihat rule 4).
+**DQ terhadap STAGING vs DQ terhadap CURATED — dua behavior yang berbeda, penting untuk dibedakan**:
+
+- **RAW dan STAGING tidak pernah menjadi hard gate** — DQ tidak mengubah, menghapus, atau menyembunyikan satu pun baris di kedua layer ini. Semua laporan (termasuk yang gagal DQ) tetap ada di STAGING apa adanya, dan tetap bisa diaudit lewat tabel DQ terpisah (`*_staging_dq`).
+- **CURATED, sebaliknya, MENERAPKAN DQ sebagai hard gate**: `disaster_curated.sql` melakukan `LEFT JOIN` ke `disaster_batch_staging_dq` dan `disaster_stream_staging_dq` berdasarkan `record_key`, dengan kondisi `WHERE batch_dq.record_key IS NULL AND stream_dq.record_key IS NULL`. Artinya: **hanya record yang lolos DQ (tidak tercatat di kedua tabel DQ) yang dipromosikan ke CURATED** dan tampil di dashboard. Record yang gagal salah satu dari 5 rule di atas — apa pun rule-nya — dikecualikan dari CURATED, meski tetap tersimpan penuh di STAGING untuk audit.
+
+Alur singkatnya:
+```
+STAGING → DQ CHECK → PASS → CURATED
+                    └→ FAIL → DQ ISSUE TABLE (record tetap di STAGING, tidak masuk CURATED)
+```
+
+Alasan desain:
+
+- Data source tetap dipertahankan apa adanya di RAW dan STAGING — tidak ada informasi yang hilang di kedua layer tersebut akibat DQ.
+- Dashboard (CURATED) hanya menampilkan data yang sudah tervalidasi, sehingga metric/visual yang dilihat pengguna tidak tercemar oleh record dengan region_code NULL/tidak valid, field wajib kosong, atau inkonsistensi lain.
+- Record yang gagal tetap dapat diidentifikasi dan ditelusuri secara eksplisit lewat tabel DQ terpisah (`*_staging_dq`) — bukan dihapus permanen, hanya tidak dipromosikan ke layer dashboard.
+- Validasi hasil terakhir: CURATED turun dari 46 menjadi 42 baris (4 record dikecualikan karena tercatat di `disaster_batch_staging_dq`), overlap CURATED↔DQ = 0, dan tidak ada duplikat baris akibat join (`LEFT JOIN ... WHERE record_key IS NULL` aman terhadap DQ table yang punya banyak baris per `record_key`).
 
 ## 9. Idempotency
 
